@@ -25,7 +25,7 @@ impl MemoryPage {
         let next_over_flow_page_id = page.read_next_over_flow_page_id();
         let pointers = page.read_pointers();
         let cells = page.read_cells();
-        MemoryPage {
+        Self {
             page_type,
             next_over_flow_page_id,
             pointers,

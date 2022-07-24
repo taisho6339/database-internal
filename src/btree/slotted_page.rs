@@ -3,7 +3,7 @@ use byteorder::{BigEndian, ReadBytesExt};
 use super::disk_manager::PageId;
 
 // 4KiB
-const PAGE_SIZE: usize = 1024 * 4;
+pub const PAGE_SIZE: usize = 1024 * 4;
 // 0x32DD is a prefix which represents a page
 pub const MAGIC_NUMBER_LEAF: u32 = 0x32DD56AA;
 pub const MAGIC_NUMBER_INTERNAL: u32 = 0x32DD77AB;
@@ -43,6 +43,12 @@ impl CellPointer {
 impl SlottedPage {
     pub fn new() -> Self {
         SlottedPage { data: [0; PAGE_SIZE] }
+    }
+
+    pub fn from(data: &[u8; PAGE_SIZE]) -> Self {
+        Self {
+            data,
+        }
     }
 
     fn check_sum(&self) -> u32 {
