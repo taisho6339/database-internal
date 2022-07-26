@@ -13,4 +13,7 @@ impl BufferManager {
             pages
         }
     }
+    pub fn add_page(&mut self, page_id: PageId, page: MemoryPage) {
+        self.pages.insert(page_id, page);
+    }
 }

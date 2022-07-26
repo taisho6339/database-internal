@@ -41,11 +41,15 @@ impl CellPointer {
        -------------------------------------------------------------------
  */
 impl SlottedPage {
-    pub fn new() -> Self {
-        SlottedPage { data: [0; PAGE_SIZE] }
+    pub fn new(magic_number: u32, page_version: u8) -> Self {
+        let mut page = SlottedPage { data: [0; PAGE_SIZE] };
+        page.write_magic_number(magic_number);
+        page.write_version(page_version);
+        page.write_check_sum();
+        page
     }
 
-    pub fn from(data: &[u8; PAGE_SIZE]) -> Self {
+    pub fn from(data: [u8; PAGE_SIZE]) -> Self {
         Self {
             data,
         }
@@ -53,6 +57,10 @@ impl SlottedPage {
 
     fn check_sum(&self) -> u32 {
         crc32fast::hash(self.data[0..13].as_ref())
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        self.data.as_ref()
     }
 
     pub fn read_magic_number(&self) -> u32 {
@@ -81,6 +89,9 @@ impl SlottedPage {
 
     pub fn read_pointers(&self) -> Vec<CellPointer> {
         let num = self.read_num_pointer();
+        if num == 0 {
+            return Vec::<CellPointer>::new();
+        }
         let cell_pointer_size = size_of::<CellPointer>();
         let index = cell_pointer_size * num as usize;
         let pointers_ref = self.data[17..index].as_ref();

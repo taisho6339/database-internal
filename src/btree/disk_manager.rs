@@ -1,6 +1,6 @@
 use std::fs::{File, OpenOptions};
 use std::io;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use crate::btree::slotted_page::SlottedPage;
 
@@ -38,8 +38,10 @@ impl DiskManager {
         self.next_page_id
     }
 
-    pub fn create_page(&self) -> SlottedPage {
-        let page = SlottedPage::new();
+    pub fn write_page(&mut self, page_id: &PageId, page: &SlottedPage) -> io::Result<()> {
+        let offset = page_id.to_u64();
+        self.file.seek(SeekFrom::Start(offset))?;
+        self.file.write_all(page.bytes())
     }
 
     pub fn fetch_page(&mut self, page_id: PageId, buf: &mut [u8]) -> io::Result<()> {
