@@ -3,6 +3,16 @@
 version = 3
 
 [[package]]
+name = "binary-layout"
+version = "3.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e89c9f31c2604ed12a5d415dd8d128849cbf242aa3e20bd2076fb9208dafd4b0"
+dependencies = [
+ "doc-comment",
+ "paste",
+]
+
+[[package]]
 name = "byteorder"
 version = "1.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -27,6 +37,19 @@ dependencies = [
 name = "database-internal"
 version = "0.1.0"
 dependencies = [
+ "binary-layout",
  "byteorder",
  "crc32fast",
 ]
+
+[[package]]
+name = "doc-comment"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fea41bba32d969b513997752735605054bc0dfa92b4c56bf1189f2e174be7a10"
+
+[[package]]
+name = "paste"
+version = "1.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c520e05135d6e763148b6426a837e239041653ba7becd2e538c076c738025fc"

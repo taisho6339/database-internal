@@ -1,194 +1,126 @@
-use std::mem::size_of;
-use byteorder::{BigEndian, ReadBytesExt};
-use super::disk_manager::PageId;
+use binary_layout::define_layout;
+
+/*
+ 4KiB per a page
+ -------------------------------------------------------------------
+ |                        MagicNumber(4b)                          |
+ -------------------------------------------------------------------
+ |                     Number of pointers(4b)                      |
+ -------------------------------------------------------------------
+ |                     Next overflow page id (4b)                  |
+ -------------------------------------------------------------------
+ |                     Cell offset (4b)                            |
+ -------------------------------------------------------------------
+ |                        Check sum (4b)                           |
+ -------------------------------------------------------------------
+ |  Version (1b)  |                  Pointers                      |
+ -------------------------------------------------------------------
+ |                           Cells                                 |
+ -------------------------------------------------------------------
+ */
 
 // 4KiB
 pub const PAGE_SIZE: usize = 1024 * 4;
+pub const HEADER_SIZE: usize = 21;
+pub const PAGE_VERSION_V1: u8 = 1;
 // 0x32DD is a prefix which represents a page
 pub const MAGIC_NUMBER_LEAF: u32 = 0x32DD56AA;
 pub const MAGIC_NUMBER_INTERNAL: u32 = 0x32DD77AB;
-pub const PAGE_VERSION_V1: u8 = 1;
+
+define_layout!(page_header, BigEndian, {
+    magic_number: u32,
+    number_of_pointers: u32,
+    next_overflow_page_id: u32,
+    cell_offset: u32,
+    check_sum: u32,
+    version: u8,
+});
+
+define_layout!(page, BigEndian, {
+    header: page_header::NestedView,
+    body: [u8; PAGE_SIZE - HEADER_SIZE],
+});
 
 pub struct SlottedPage {
     data: [u8; PAGE_SIZE],
 }
 
-pub struct CellPointer(pub u16);
-
-impl CellPointer {
-    pub fn from(input: &[u8]) -> Self {
-        let pointer = input.as_ref().read_u16::<BigEndian>().unwrap_or(0);
-        CellPointer(pointer)
-    }
-}
-
-/*
- 4KiB per a page
-       -------------------------------------------------------------------
- 0-4   |                        MagicNumber(4b)                          |
-       -------------------------------------------------------------------
- 4-8   |                     Number of pointers(4b)                      |
-       -------------------------------------------------------------------
- 8-12  |                     Next overflow page id (4b)                  |
-       -------------------------------------------------------------------
- 12-16 |                     Cell offset (4b)                            |
-       -------------------------------------------------------------------
- 16-20 |                        Check sum (4b)                           |
-       -------------------------------------------------------------------
- 20-...|  Version (1b)  |                  Pointers                      |
-       -------------------------------------------------------------------
-       |                           Cells                                 |
-       -------------------------------------------------------------------
- */
 impl SlottedPage {
-    pub fn new(magic_number: u32, page_version: u8) -> Self {
-        let mut page = SlottedPage { data: [0; PAGE_SIZE] };
-        page.write_magic_number(magic_number);
-        page.write_version(page_version);
-        page.write_check_sum();
-        page
+    pub fn new(magic_number: u32) -> Self {
+        let mut s = Self {
+            data: [0; PAGE_SIZE]
+        };
+        let sum = s.check_sum();
+        s.header_view_mut().magic_number_mut().write(magic_number);
+        s.header_view_mut().version_mut().write(PAGE_VERSION_V1);
+        s.header_view_mut().check_sum_mut().write(sum);
+
+        s
     }
 
-    pub fn from(data: [u8; PAGE_SIZE]) -> Self {
+    pub fn wrap(data: [u8; PAGE_SIZE]) -> Self {
         Self {
-            data,
+            data
         }
     }
 
-    fn check_sum(&self) -> u32 {
-        crc32fast::hash(self.data[0..13].as_ref())
+    // Postgres
+    // https://github.com/postgres/postgres/blob/2cd2569c72b8920048e35c31c9be30a6170e1410/src/include/storage/checksum_impl.h#L196
+    pub fn check_sum(&mut self) -> u32 {
+        let old_csum = self.header_view().check_sum().read();
+
+        // Derived from PostgresSQL implementation
+        // https://github.com/postgres/postgres/blob/2cd2569c72b8920048e35c31c9be30a6170e1410/src/include/storage/checksum_impl.h#L196
+        self.header_view_mut().check_sum_mut().write(0);
+        let csum = crc32fast::hash(&self.data);
+        self.header_view_mut().check_sum_mut().write(old_csum);
+
+        csum
     }
 
-    pub fn bytes(&self) -> &[u8] {
-        self.data.as_ref()
+    pub fn header_view(&self) -> page_header::View<impl AsRef<[u8]> + '_> {
+        let page_view = page::View::new(&self.data[..]);
+        page_view.into_header()
     }
 
-    pub fn read_magic_number(&self) -> u32 {
-        self.data[0..4].as_ref().read_u32::<BigEndian>().unwrap_or(0)
+    pub fn header_view_mut(&mut self) -> page_header::View<impl AsRef<[u8]> + AsMut<[u8]> + '_> {
+        let page_view = page::View::new(&mut self.data[..]);
+        page_view.into_header()
     }
 
-    pub fn read_num_pointer(&self) -> u32 {
-        self.data[4..8].as_ref().read_u32::<BigEndian>().unwrap_or(0)
+    pub fn body_view(&self) -> page::View<impl AsRef<[u8]> + '_> {
+        page::View::new(&self.data)
     }
 
-    pub fn read_next_over_flow_page_id(&self) -> PageId {
-        PageId(self.data[8..12].as_ref().read_u32::<BigEndian>().unwrap_or(0))
+    pub fn body_view_mut(&mut self) -> page::View<impl AsRef<[u8]> + '_> {
+        page::View::new(&mut self.data)
     }
 
-    pub fn read_cell_offset(&self) -> u32 {
-        self.data[12..16].as_ref().read_u32::<BigEndian>().unwrap_or(PAGE_SIZE as u32)
-    }
-
-    pub fn read_check_sum(&self) -> u32 {
-        self.data[16..20].as_ref().read_u32::<BigEndian>().unwrap_or(0)
-    }
-
-    pub fn read_version(&self) -> u8 {
-        self.data[20..21].as_ref().read_u8().unwrap_or(0)
-    }
-
-    pub fn read_pointers(&self) -> Vec<CellPointer> {
-        let num = self.read_num_pointer();
-        if num == 0 {
-            return Vec::<CellPointer>::new();
-        }
-        let cell_pointer_size = size_of::<CellPointer>();
-        let index = cell_pointer_size * num as usize;
-        let pointers_ref = self.data[17..index].as_ref();
-        pointers_ref
-            .chunks(cell_pointer_size)
-            .map(|item| CellPointer::from(item))
-            .collect::<Vec<CellPointer>>()
-    }
-
-    pub fn read_cells(&self) -> Vec<u8> {
-        let offset = PAGE_SIZE - self.read_cell_offset() as usize;
-        self.data[offset..PAGE_SIZE].as_ref().to_vec()
-    }
-
-    pub fn write_magic_number(&mut self, magic_numer: u32) {
-        self.data[0..4].copy_from_slice(&magic_numer.to_be_bytes());
-    }
-
-    pub fn write_num_pointer(&mut self, num_pointer: u32) {
-        self.data[4..8].copy_from_slice(&num_pointer.to_be_bytes())
-    }
-
-    pub fn write_next_over_flow_page_id(&mut self, page_id: PageId) {
-        self.data[8..12].copy_from_slice(&page_id.to_u32().to_be_bytes().as_ref())
-    }
-
-    pub fn write_cell_offset(&mut self, offset: u32) {
-        self.data[12..16].copy_from_slice(offset.to_be_bytes().as_ref())
-    }
-
-    pub fn write_check_sum(&mut self) {
-        let checksum = self.check_sum();
-        self.data[16..20].copy_from_slice(checksum.to_be_bytes().as_ref())
-    }
-
-    pub fn write_version(&mut self, version: u8) {
-        self.data[20..21].copy_from_slice(&version.to_be_bytes())
+    pub fn to_bytes(&self) -> &[u8; PAGE_SIZE] {
+        page::View::new(&self.data).into_storage()
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-pub trait Cell {
-    fn bytes(&self) -> &[u8];
-}
-
-pub struct KeyCell {
-    data: Vec<u8>,
-}
-
-impl KeyCell {
-    pub fn write_key_size(&mut self, size: u32) {
-        self.data[0..4].copy_from_slice(size.to_be_bytes().as_ref())
-    }
-
-    pub fn write_next_page_id(&mut self, page_id: PageId) {
-        self.data[4..8].copy_from_slice(page_id.to_u32().to_be_bytes().as_ref())
-    }
-
-    pub fn write_key(&mut self, key: &mut Vec<u8>) {
-        self.data.append(key)
-    }
-}
-
-impl Cell for KeyCell {
-    fn bytes(&self) -> &[u8] {
-        &self.data.as_slice()
-    }
-}
-
-pub struct KeyValueCell {
-    data: Vec<u8>,
-}
-
-impl KeyValueCell {
-    pub fn write_key_size(&mut self, size: u32) {
-        self.data[0..4].copy_from_slice(size.to_be_bytes().as_ref())
-    }
-    pub fn write_value_size(&mut self, size: u32) {
-        self.data[4..8].copy_from_slice(size.to_be_bytes().as_ref())
-    }
-    pub fn write_key(&mut self, key: &mut Vec<u8>) {
-        self.data.append(key)
-    }
-    pub fn write_value(&mut self, key: &mut Vec<u8>) {
-        self.data.append(key)
-    }
-}
-
-impl Cell for KeyValueCell {
-    fn bytes(&self) -> &[u8] {
-        &self.data.as_slice()
+    #[test]
+    fn new_as_expected() {
+        let page = SlottedPage::new(MAGIC_NUMBER_LEAF);
+        assert_eq!(page.header_view().magic_number().read(), MAGIC_NUMBER_LEAF);
+        assert_eq!(page.header_view().version().read(), PAGE_VERSION_V1);
+        assert_eq!(page.header_view().check_sum().read(), 3340501009);
+        assert_eq!(page.header_view().next_overflow_page_id().read(), 0);
+        assert_eq!(page.header_view().number_of_pointers().read(), 0);
+        assert_eq!(page.header_view().cell_offset().read(), 0);
     }
 }
 
 /*
 TODO:
     * CellのInsertどうやって実現する？どこにinsertする？insertできるかの判定は？pointerのソートは？free cellの管理は？
+    * Vecにするタイミングでコピー発生しちゃうかも？
     * Pageを定義してserialize、deserializeできるようにする
     * 実際にファイルに書き込み読み込みできるようにする
     * Pageをつなげて、探索ができるようにする
