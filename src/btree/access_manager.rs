@@ -32,6 +32,16 @@ impl AccessManager {
         Ok(())
     }
 
+    pub fn fetch_page(&mut self, page_id: &PageId) -> Option<SlottedPage> {
+        let buffer_ret = self.buffer_manager.fetch_page(page_id);
+        match buffer_ret {
+            Some(p) => Some(*p),
+            None => {
+                self.disk_manager.fetch_page(page_id)
+            }
+        }
+    }
+
     pub fn new(path: impl AsRef<Path>) -> Option<Self> {
         let mut disk_manager = DiskManager::new(path).ok()?;
         let mut buffer_manager = BufferManager::new();
@@ -44,13 +54,25 @@ impl AccessManager {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use super::AccessManager;
+
+    const DB_PATH: &str = "test_access_manager.idb";
+
+    struct Cleanup;
+
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            fs::remove_file(DB_PATH).expect("failed to remove db file");
+        }
+    }
 
     #[test]
     fn test() {
-        let path = "test.idb";
-        let manager = AccessManager::new(path);
-        assert_eq!(manager.is_some(), true);
-        assert_eq!(manager.unwrap().initialize_pages().is_ok(), true);
+        let cleanup = Cleanup;
+        let ret = AccessManager::new(DB_PATH);
+        assert_eq!(ret.is_some(), true);
+        let manager = ret.unwrap();
+        assert_eq!(manager.initialize_pages().is_ok(), true);
     }
 }
