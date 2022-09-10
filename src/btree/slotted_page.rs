@@ -41,6 +41,7 @@ define_layout!(page, BigEndian, {
     body: [u8; PAGE_SIZE - HEADER_SIZE],
 });
 
+#[derive(Debug)]
 pub struct SlottedPage {
     data: [u8; PAGE_SIZE],
 }
@@ -62,6 +63,11 @@ impl SlottedPage {
         Self {
             data
         }
+    }
+
+    pub fn empty(&self) -> bool {
+        let m = self.header_view().magic_number().read();
+        return m != MAGIC_NUMBER_INTERNAL && m != MAGIC_NUMBER_LEAF;
     }
 
     // Postgres
