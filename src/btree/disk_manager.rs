@@ -3,7 +3,7 @@ use std::io;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
-use crate::btree::slotted_page::{page, PAGE_SIZE, SlottedPage};
+use crate::btree::slotted_page::{PAGE_SIZE, SlottedPage};
 
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct PageId(pub u32);

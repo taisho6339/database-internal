@@ -1,60 +1,86 @@
-use std::io;
-use std::io::ErrorKind;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::Path;
+use std::rc::Rc;
+
+use crate::btree::buffer_manager::{Error, PageBuffer};
 use crate::btree::slotted_page::MAGIC_NUMBER_LEAF;
 
 use super::buffer_manager::BufferManager;
 use super::disk_manager::{DiskManager, PageId};
-use super::slotted_page::{MAGIC_NUMBER_INTERNAL, PAGE_SIZE, PAGE_VERSION_V1};
 use super::slotted_page::SlottedPage;
 
 pub struct AccessManager {
     //FIXME:
     disk_manager: DiskManager,
     buffer_manager: BufferManager,
+    buffer_table: HashMap<PageId, BufferId>,
+}
+
+#[derive(Debug, Default, Clone, Copy, Eq, PartialEq, Hash)]
+pub struct BufferId(pub u32);
+
+impl BufferId {
+    pub fn to_usize(&self) -> usize { self.0 as usize }
+    pub fn to_u32(self) -> u32 {
+        self.0
+    }
+    pub fn to_u64(self) -> u64 {
+        self.0 as u64
+    }
+    pub fn increment_id(self) -> BufferId {
+        BufferId(self.0 + 1)
+    }
 }
 
 impl AccessManager {
-    pub fn initialize(&mut self) -> io::Result<()> {
-        // TODO: is it valid to check whether root page is already created or not by using next_page_id?
-        let next_page_id = self.disk_manager.next_page_id();
-        let root_page = match next_page_id {
-            PageId(0) => {
-                SlottedPage::new(MAGIC_NUMBER_LEAF)
-            }
-            _ => {
-                self.disk_manager
-                    .fetch_page(&PageId(0))
-                    .ok_or(std::io::Error::new(ErrorKind::NotFound, ""))?
-            }
-        };
-        self.buffer_manager.add_page(PageId(0), root_page);
-        Ok(())
-    }
-
-    pub fn fetch_page(&mut self, page_id: &PageId) -> Option<SlottedPage> {
-        let buffer_ret = self.buffer_manager.fetch_page(page_id);
-        match buffer_ret {
-            Some(p) => Some(*p),
-            None => {
-                self.disk_manager.fetch_page(page_id)
-            }
-        }
-    }
-
     pub fn new(path: impl AsRef<Path>) -> Option<Self> {
         let mut disk_manager = DiskManager::new(path).ok()?;
-        let mut buffer_manager = BufferManager::new();
+        let mut buffer_manager = BufferManager::new(10);
+        let table = HashMap::new();
         Some(Self {
             disk_manager,
             buffer_manager,
+            buffer_table: table,
         })
     }
+
+    pub fn initialize(&mut self) -> Result<(), Error> {
+        let page_id = PageId(0);
+        let root_page = self.disk_manager.fetch_page(&page_id);
+        let p = match root_page {
+            Some(p) => {
+                RefCell::new(p)
+            }
+            None => {
+                RefCell::new(SlottedPage::new(MAGIC_NUMBER_LEAF))
+            }
+        };
+        let buffer_id = self.buffer_manager.add_page(p)?;
+        self.buffer_table.insert(page_id, buffer_id);
+
+        Ok(())
+    }
+    //
+    // pub fn fetch_page(&mut self, page_id: &PageId) -> Result<Rc<RefCell<PageBuffer>>, Error> {
+    //     if let Some(&buffer_id) = self.buffer_table.get(page_id) {
+    //         if let Some(buffer) = self.buffer_manager.fetch_page(&buffer_id) {
+    //             return Some(buffer.clone());
+    //         }
+    //     }
+    //     if let Some(page) = self.disk_manager.fetch_page(page_id) {
+    //         let ret = self.buffer_manager.add_page(RefCell::new(page));
+    //         if ret.is
+    //         return Some(Rc);
+    //     }
+    //     None
+    // }
 }
 
 #[cfg(test)]
 mod tests {
     use std::fs;
+
     use super::AccessManager;
 
     const DB_PATH: &str = "test_access_manager.idb";
@@ -72,7 +98,7 @@ mod tests {
         let cleanup = Cleanup;
         let ret = AccessManager::new(DB_PATH);
         assert_eq!(ret.is_some(), true);
-        let manager = ret.unwrap();
-        assert_eq!(manager.initialize_pages().is_ok(), true);
+        let mut manager = ret.unwrap();
+        assert_eq!(manager.initialize().is_ok(), true);
     }
 }
