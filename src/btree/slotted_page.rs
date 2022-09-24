@@ -148,6 +148,14 @@ impl SlottedPage {
         cell::View::new(cell_bytes)
     }
 
+    pub fn cell_view_mut(&mut self, index: usize) -> cell::View<impl AsRef<[u8]> + AsMut<[u8]> + '_> {
+        let offset = self.pointer_view(index).cell_offset().read() as usize;
+        let length = self.pointer_view(index).cell_length().read() as usize;
+        let cell_bytes = &mut self.body_view_mut()[offset..(offset + length)];
+
+        cell::View::new(cell_bytes)
+    }
+
     fn cell_free_space(&self) -> usize {
         let number_of_pointers = self.header_view().number_of_pointers().read();
         let pointers_length = pointer::SIZE.unwrap() * number_of_pointers as usize;
@@ -157,7 +165,7 @@ impl SlottedPage {
     }
 
     // TODO: return Result type
-    // Handling cell space defrag
+    // Handling cell space compaction
     pub fn add_cell(&mut self, index: usize, key: &[u8], value: &[u8]) {
         let key_size = key.len();
         let value_size = value.len();
@@ -167,33 +175,32 @@ impl SlottedPage {
             return;
         }
 
-        // Add a cell
-        let cell_offset = self.header_view().cell_offset().read() as usize;
-        let cell_start = (cell_offset - cell_size) as usize;
-        let cell_end = cell_offset as usize;
-        let mut cell_buffer: Vec<u8> = vec![0; cell_size as usize];
-        cell_buffer[0..2].copy_from_slice(&(key_size as u16).to_be_bytes());
-        cell_buffer[2..4].copy_from_slice(&(value_size as u16).to_be_bytes());
-        cell_buffer[4..(4 + key_size)].copy_from_slice(key);
-        cell_buffer[(4 + key_size)..].copy_from_slice(value);
-        self.body_view_mut()[cell_start..cell_end].copy_from_slice(&cell_buffer[..]);
-        self.header_view_mut().cell_offset_mut().write(cell_start as u16);
-
         // Insert a pointers
         let number_of_pointers = self.header_view().number_of_pointers().read();
         let new_pointers_length = ((number_of_pointers + 1) as usize) * pointer::SIZE.unwrap();
+        let next_cell_offset = self.header_view().cell_offset().read() as usize;
+        let cell_start = (next_cell_offset - cell_size) as usize;
+
         let tail_start = index * pointer::SIZE.unwrap();
         let tail_end = (number_of_pointers as usize) * pointer::SIZE.unwrap();
         let new_tail_start = tail_start + pointer::SIZE.unwrap();
         self.body_view_mut()[0..new_pointers_length].copy_within(tail_start..tail_end, new_tail_start);
-        self.header_view_mut().number_of_pointers_mut().write(number_of_pointers + 1);
-        let mut pointer_view_mut = self.pointer_view_mut(index);
-        pointer_view_mut.cell_offset_mut().write(index as u16);
-        pointer_view_mut.cell_length_mut().write(cell_size as u16);
+        self.pointer_view_mut(index).cell_offset_mut().write(cell_start as u16);
+        self.pointer_view_mut(index).cell_length_mut().write(cell_size as u16);
 
-        // Update CRC
-        // let crc = self.check_sum();
-        // self.header_view_mut().check_sum_mut().write(crc);
+        // Add a cell
+        self.cell_view_mut(index).key_length_mut().write(key_size as u16);
+        self.cell_view_mut(index).value_length_mut().write(value_size as u16);
+        let mut cell_buffer: Vec<u8> = vec![0; (key_size + value_size) as usize];
+        cell_buffer[0..key_size].copy_from_slice(key);
+        cell_buffer[key_size..].copy_from_slice(value);
+        self.cell_view_mut(index).body_mut().copy_from_slice(&cell_buffer[..]);
+
+        // Update Headers
+        self.header_view_mut().cell_offset_mut().write(cell_start as u16);
+        self.header_view_mut().number_of_pointers_mut().write(number_of_pointers + 1);
+        let crc = self.check_sum();
+        self.header_view_mut().check_sum_mut().write(crc);
     }
 }
 
@@ -201,21 +208,6 @@ impl SlottedPage {
 mod tests {
     use std::io::Write;
     use super::*;
-
-    #[test]
-    fn test_add_cell() {
-        let number_of_cells: usize = 5;
-        let cell_size: usize = 8;
-        let mut page = SlottedPage::new(MAGIC_NUMBER_LEAF);
-        for i in 0..number_of_cells {
-            let key = ((i + 1) as u16).to_be_bytes();
-            let value = (1024 as u16).to_be_bytes();
-            page.add_cell(i as usize, &key, &value);
-        }
-        assert_eq!(page.header_view().magic_number().read(), MAGIC_NUMBER_LEAF);
-        assert_eq!(page.header_view().number_of_pointers().read(), number_of_cells as u16);
-        assert_eq!(page.header_view().cell_offset().read(), (PAGE_SIZE - HEADER_SIZE - number_of_cells * cell_size) as u16);
-    }
 
     #[test]
     fn test_new() {
@@ -245,5 +237,24 @@ mod tests {
         let pointer = page.pointer_view(1);
         assert_eq!(pointer.cell_offset().read(), 0);
         assert_eq!(pointer.cell_length().read(), 0);
+    }
+
+    #[test]
+    fn test_add_cell() {
+        let number_of_cells: usize = 5;
+        let cell_size: usize = 8;
+        let mut page = SlottedPage::new(MAGIC_NUMBER_LEAF);
+        for i in 0..number_of_cells {
+            let key = ((i + 1) as u16).to_be_bytes();
+            let value = (1024 as u16).to_be_bytes();
+            page.add_cell(i as usize, &key, &value);
+        }
+        assert_eq!(page.header_view().magic_number().read(), MAGIC_NUMBER_LEAF);
+        assert_eq!(page.header_view().number_of_pointers().read(), number_of_cells as u16);
+        assert_eq!(page.header_view().cell_offset().read(), (PAGE_SIZE - HEADER_SIZE - number_of_cells * cell_size) as u16);
+        assert_eq!(page.pointer_view(0).cell_offset().read(), 4068);
+        assert_eq!(page.pointer_view(0).cell_length().read(), 8);
+        assert_eq!(page.cell_view(page.pointer_view(0)).key_length().read(), 2);
+        assert_eq!(page.cell_view(page.pointer_view(0)).value_length().read(), 2);
     }
 }
