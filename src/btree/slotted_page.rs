@@ -1,7 +1,10 @@
 use std::borrow::{Borrow, BorrowMut};
 
+use anyhow::Result;
 use binary_layout::define_layout;
 use binary_layout::FieldSliceAccess;
+use thiserror::Error;
+
 use crate::btree::slotted_page::cell::body;
 
 /*
@@ -60,6 +63,14 @@ define_layout!(cell, BigEndian, {
 #[derive(Debug)]
 pub struct SlottedPage {
     data: [u8; PAGE_SIZE],
+}
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("invalid key")]
+    InvalidKey,
+    #[error("page over flow")]
+    PageOverflow,
 }
 
 impl SlottedPage {
@@ -164,19 +175,22 @@ impl SlottedPage {
         cell_offset - pointers_length
     }
 
-    // TODO: return Result type
     // Handling cell space compaction
-    pub fn add_cell(&mut self, index: usize, key: &[u8], value: &[u8]) {
+    pub fn add_cell(&mut self, index: usize, key: &[u8], value: &[u8]) -> Result<(), Error> {
         let key_size = key.len();
         let value_size = value.len();
         let cell_size = std::mem::size_of::<u16>() * 2 + key_size + value_size;
-        if self.cell_free_space() < cell_size {
-            // TODO: return some error
-            return;
+        let additional_size = pointer::SIZE.unwrap() + cell_size;
+        if self.cell_free_space() < additional_size {
+            return Err(Error::PageOverflow);
         }
 
         // Insert a pointers
         let number_of_pointers = self.header_view().number_of_pointers().read();
+        if index > number_of_pointers as usize {
+            return Err(Error::InvalidKey);
+        }
+
         let new_pointers_length = ((number_of_pointers + 1) as usize) * pointer::SIZE.unwrap();
         let next_cell_offset = self.header_view().cell_offset().read() as usize;
         let cell_start = (next_cell_offset - cell_size) as usize;
@@ -201,12 +215,15 @@ impl SlottedPage {
         self.header_view_mut().number_of_pointers_mut().write(number_of_pointers + 1);
         let crc = self.check_sum();
         self.header_view_mut().check_sum_mut().write(crc);
+
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::io::Write;
+
     use super::*;
 
     #[test]
@@ -247,7 +264,7 @@ mod tests {
         for i in 0..number_of_cells {
             let key = ((i + 1) as u16).to_be_bytes();
             let value = ((i * 2) as u16).to_be_bytes();
-            page.add_cell(i as usize, &key, &value);
+            page.add_cell(i as usize, &key, &value).unwrap();
         }
         assert_eq!(page.header_view().magic_number().read(), MAGIC_NUMBER_LEAF);
         assert_eq!(page.header_view().number_of_pointers().read(), number_of_cells as u16);
@@ -267,7 +284,7 @@ mod tests {
         let next_cell_offset = page.header_view().cell_offset().read();
 
         // Check if the new entry is inserted into the head
-        page.add_cell(0, &(0 as u16).to_be_bytes(), &(2048 as u16).to_be_bytes());
+        page.add_cell(0, &(0 as u16).to_be_bytes(), &(2048 as u16).to_be_bytes()).unwrap();
         assert_eq!(page.header_view().number_of_pointers().read(), (number_of_cells + 1) as u16);
         assert_eq!(page.header_view().cell_offset().read(), (PAGE_SIZE - HEADER_SIZE - (number_of_cells + 1) * cell_size) as u16);
         assert_eq!(page.pointer_view(0).cell_offset().read(), next_cell_offset - cell_size as u16);

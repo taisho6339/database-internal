@@ -72,7 +72,7 @@ mod tests {
         for i in 1..=number_of_cells {
             let key = ((i * 2) as u16).to_be_bytes();
             let value = (0xffff as u16).to_be_bytes();
-            page.add_cell((i - 1) as usize, &key, &value);
+            page.add_cell((i - 1) as usize, &key, &value).unwrap();
         }
         let node = Node::new(Rc::new(RefCell::new(page)));
         assert_eq!(node.find(&(3 as u16).to_be_bytes()), 1);
