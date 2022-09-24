@@ -1,9 +1,13 @@
+use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 
-use crate::btree::buffer_manager::{Error, PageBuffer};
+use thiserror::Error;
+use crate::btree::access_manager::Error::InitializeError;
+
+use crate::btree::buffer_manager::{BufferError, PageBuffer};
 use crate::btree::slotted_page::MAGIC_NUMBER_LEAF;
 
 use super::buffer_manager::BufferManager;
@@ -19,6 +23,12 @@ pub struct AccessManager {
 
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct BufferId(pub u32);
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("an error occurs in initializing: {0}")]
+    InitializeError(String),
+}
 
 impl BufferId {
     pub fn to_usize(&self) -> usize { self.0 as usize }
@@ -56,10 +66,20 @@ impl AccessManager {
                 RefCell::new(SlottedPage::new(MAGIC_NUMBER_LEAF))
             }
         };
-        let buffer_id = self.buffer_manager.add_page(p)?;
-        self.buffer_table.insert(page_id, buffer_id);
-
-        Ok(())
+        let ret = self.buffer_manager.add_page(p);
+        return match ret {
+            Ok(buffer_id) => {
+                self.buffer_table.insert(page_id, buffer_id);
+                Ok(())
+            }
+            Err(e) => {
+                match e {
+                    BufferError::NoFreeBuffer => {
+                        Err(InitializeError(String::from("no free buffer")))
+                    }
+                }
+            }
+        };
     }
     //
     // pub fn fetch_page(&mut self, page_id: &PageId) -> Result<Rc<RefCell<PageBuffer>>, Error> {
