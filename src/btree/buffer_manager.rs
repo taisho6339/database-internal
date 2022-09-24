@@ -7,7 +7,7 @@ use crate::btree::access_manager::BufferId;
 use crate::btree::slotted_page::SlottedPage;
 
 #[derive(Debug, Error)]
-pub enum Error {
+pub enum BufferError {
     #[error("no free buffer available in buffer pool")]
     NoFreeBuffer,
 }
@@ -35,7 +35,7 @@ pub struct BufferItem {
 }
 
 pub struct BufferManager {
-    // Clock-wise algorithm
+    // Clock-sweep algorithm
     cache: Vec<BufferItem>,
     next_check_id: BufferId,
 }
@@ -52,11 +52,11 @@ impl BufferManager {
     }
 
     // TODO: implement concurrency control later
-    pub fn add_page(&mut self, item: RefCell<SlottedPage>) -> Result<BufferId, Error> {
+    pub fn add_page(&mut self, item: RefCell<SlottedPage>) -> Result<BufferId, BufferError> {
         let mut pinned_count = 0;
         loop {
             if pinned_count >= self.cache.len() {
-                return Err(Error::NoFreeBuffer);
+                return Err(BufferError::NoFreeBuffer);
             }
             let item = &mut self.cache[self.next_check_id.to_usize()];
             if item.is_pinned {
