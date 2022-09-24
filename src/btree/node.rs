@@ -33,8 +33,7 @@ impl Node {
                 return 0;
             }
             let mid = (start + end) / 2;
-            let pointer = page_ref.borrow().pointer_view(mid as usize);
-            let cell_view = page_ref.borrow().cell_view(pointer);
+            let cell_view = page_ref.borrow().cell_view(mid as usize);
             let cell_key_length = cell_view.borrow().key_length().read() as usize;
             let cell_body = cell_view.borrow().body();
             let cell_key = &cell_body[..cell_key_length];

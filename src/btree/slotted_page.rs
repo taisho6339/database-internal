@@ -140,9 +140,9 @@ impl SlottedPage {
         pointer::View::new(pointer_bytes)
     }
 
-    pub fn cell_view(&self, pointer: pointer::View<impl AsRef<[u8]>>) -> cell::View<impl AsRef<[u8]> + '_> {
-        let offset = pointer.cell_offset().read() as usize;
-        let length = pointer.cell_length().read() as usize;
+    pub fn cell_view(&self, index: usize) -> cell::View<impl AsRef<[u8]> + '_> {
+        let offset = self.pointer_view(index).cell_offset().read() as usize;
+        let length = self.pointer_view(index).cell_length().read() as usize;
         let cell_bytes = &self.body_view()[offset..(offset + length)];
 
         cell::View::new(cell_bytes)
@@ -241,20 +241,48 @@ mod tests {
 
     #[test]
     fn test_add_cell() {
-        let number_of_cells: usize = 5;
         let cell_size: usize = 8;
+        let number_of_cells: usize = 5;
         let mut page = SlottedPage::new(MAGIC_NUMBER_LEAF);
         for i in 0..number_of_cells {
             let key = ((i + 1) as u16).to_be_bytes();
-            let value = (1024 as u16).to_be_bytes();
+            let value = ((i * 2) as u16).to_be_bytes();
             page.add_cell(i as usize, &key, &value);
         }
         assert_eq!(page.header_view().magic_number().read(), MAGIC_NUMBER_LEAF);
         assert_eq!(page.header_view().number_of_pointers().read(), number_of_cells as u16);
         assert_eq!(page.header_view().cell_offset().read(), (PAGE_SIZE - HEADER_SIZE - number_of_cells * cell_size) as u16);
-        assert_eq!(page.pointer_view(0).cell_offset().read(), 4068);
+        for i in 0..number_of_cells {
+            assert_eq!(page.pointer_view(i).cell_offset().read(), (PAGE_SIZE - HEADER_SIZE - cell_size * (i + 1)) as u16);
+            assert_eq!(page.pointer_view(i).cell_length().read(), 8);
+            assert_eq!(page.cell_view(i).key_length().read(), 2);
+            assert_eq!(page.cell_view(i).value_length().read(), 2);
+            let key = ((i + 1) as u16).to_be_bytes();
+            let value = ((i * 2) as u16).to_be_bytes();
+            assert_eq!(page.cell_view(i).body()[0..2], key);
+            assert_eq!(page.cell_view(i).body()[2..4], value);
+        }
+
+        // Insert a cell to the head
+        let next_cell_offset = page.header_view().cell_offset().read();
+
+        // Check if the new entry is inserted into the head
+        page.add_cell(0, &(0 as u16).to_be_bytes(), &(2048 as u16).to_be_bytes());
+        assert_eq!(page.header_view().number_of_pointers().read(), (number_of_cells + 1) as u16);
+        assert_eq!(page.header_view().cell_offset().read(), (PAGE_SIZE - HEADER_SIZE - (number_of_cells + 1) * cell_size) as u16);
+        assert_eq!(page.pointer_view(0).cell_offset().read(), next_cell_offset - cell_size as u16);
         assert_eq!(page.pointer_view(0).cell_length().read(), 8);
-        assert_eq!(page.cell_view(page.pointer_view(0)).key_length().read(), 2);
-        assert_eq!(page.cell_view(page.pointer_view(0)).value_length().read(), 2);
+        let key = (0 as u16).to_be_bytes();
+        let value = (2048 as u16).to_be_bytes();
+        assert_eq!(page.cell_view(0).body()[0..2], key);
+        assert_eq!(page.cell_view(0).body()[2..4], value);
+
+        // Check if the previous pointers are slided by one
+        for i in 1..=number_of_cells {
+            let key = (i as u16).to_be_bytes();
+            let value = (((i - 1) * 2) as u16).to_be_bytes();
+            assert_eq!(page.cell_view(i).body()[0..2], key);
+            assert_eq!(page.cell_view(i).body()[2..4], value);
+        }
     }
 }
