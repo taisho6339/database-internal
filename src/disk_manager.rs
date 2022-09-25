@@ -3,6 +3,8 @@ use std::io;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
+use anyhow::{anyhow, Context, Result};
+
 use crate::btree::slotted_page::{PAGE_SIZE, SlottedPage};
 
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq, Hash)]
@@ -42,21 +44,29 @@ impl DiskManager {
         &self.next_page_id
     }
 
-    pub fn write_page(&mut self, page_id: &PageId, page: &SlottedPage) -> io::Result<()> {
+    pub fn write_page(&mut self, page_id: PageId, page: &SlottedPage) -> Result<()> {
         let offset = page_id.to_u64();
-        self.file.seek(SeekFrom::Start(offset))?;
-        self.file.write_all(page.to_bytes())
+        self.file.seek(SeekFrom::Start(offset)).context("failed to seek the file").map_err(|e| {
+            anyhow!(e)
+        })?;
+        self.file.write_all(page.to_bytes()).context("failed to write bytes into the file").map_err(|e| {
+            anyhow!(e)
+        })
     }
 
-    pub fn fetch_page(&mut self, page_id: &PageId) -> Option<SlottedPage> {
+    pub fn fetch_page(&mut self, page_id: PageId) -> Result<SlottedPage> {
         let offset = page_id.to_u64();
         let mut buf = [0 as u8; PAGE_SIZE];
-        self.file.seek(SeekFrom::Start(offset)).ok()?;
-        let ret = self.file.read_exact(&mut buf);
+        self.file.seek(SeekFrom::Start(offset)).context("failed to seek the file").map_err(|e| {
+            anyhow!(e)
+        })?;
 
+        let ret = self.file.read_exact(&mut buf).context("failed to read bytes from the file").map_err(|e| {
+            anyhow!(e)
+        });
         match ret {
-            Ok(_) => Some(SlottedPage::wrap(buf)),
-            Err(e) => None
+            Ok(_) => Ok(SlottedPage::wrap(buf)),
+            Err(e) => Err(anyhow!(e))
         }
     }
 }
@@ -92,15 +102,15 @@ mod tests {
 
         let mut manager = ret.unwrap();
         let page_id = PageId(0);
-        let fetch_ret = manager.fetch_page(&page_id);
-        assert_eq!(fetch_ret.is_some(), false);
+        let fetch_ret = manager.fetch_page(page_id);
+        assert_eq!(fetch_ret.is_ok(), false);
 
         let page = SlottedPage::new(MAGIC_NUMBER_LEAF);
-        let write_ret = manager.write_page(&page_id, &page);
+        let write_ret = manager.write_page(page_id, &page);
         assert_eq!(write_ret.is_ok(), true);
 
-        let fetch_ret = manager.fetch_page(&page_id);
-        assert_eq!(fetch_ret.is_some(), true);
+        let fetch_ret = manager.fetch_page(page_id);
+        assert_eq!(fetch_ret.is_ok(), true);
         let fetched_page = fetch_ret.unwrap();
         assert_eq!(fetched_page.header_view().check_sum().read(), 3340501009);
     }

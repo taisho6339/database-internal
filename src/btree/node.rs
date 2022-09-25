@@ -31,12 +31,6 @@ impl Node {
         }
     }
 
-    // Insertの実装
-    // Branch => Leafの探し当て
-    // Leaf => Add cell
-    // Pageの使用率が一定を超えたらノードをSplitする
-    // 分割はRootノードまで再帰する
-    // Pageが溢れたら... => デフラグする...?
     pub fn insert(&self, key: &[u8], value: &[u8]) -> anyhow::Result<(), Error> {
         let (index, found) = self.find(key);
 

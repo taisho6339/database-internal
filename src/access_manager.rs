@@ -4,11 +4,12 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 
+use anyhow::{anyhow, Context, Result};
 use thiserror::Error;
 
 use crate::access_manager::Error::InitializeError;
 use crate::btree::slotted_page::{MAGIC_NUMBER_LEAF, SlottedPage};
-use crate::buffer_manager::{BufferError, PageBuffer};
+use crate::buffer_manager::{BufferError, BufferId, PageBuffer};
 
 use super::buffer_manager::BufferManager;
 use super::disk_manager::{DiskManager, PageId};
@@ -20,26 +21,10 @@ pub struct AccessManager {
     buffer_table: HashMap<PageId, BufferId>,
 }
 
-#[derive(Debug, Default, Clone, Copy, Eq, PartialEq, Hash)]
-pub struct BufferId(pub u32);
-
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("an error occurs in initializing: {0}")]
     InitializeError(String),
-}
-
-impl BufferId {
-    pub fn to_usize(&self) -> usize { self.0 as usize }
-    pub fn to_u32(self) -> u32 {
-        self.0
-    }
-    pub fn to_u64(self) -> u64 {
-        self.0 as u64
-    }
-    pub fn increment_id(self) -> BufferId {
-        BufferId(self.0 + 1)
-    }
 }
 
 impl AccessManager {
@@ -54,46 +39,36 @@ impl AccessManager {
         })
     }
 
-    pub fn initialize(&mut self) -> Result<(), Error> {
+    pub fn initialize(&mut self) -> Result<()> {
         let page_id = PageId(0);
-        let root_page = self.disk_manager.fetch_page(&page_id);
-        let p = match root_page {
-            Some(p) => {
-                RefCell::new(p)
+        let ret = self.disk_manager.fetch_page(page_id);
+        let p = match ret {
+            Ok(p) => {
+                p
             }
-            None => {
-                RefCell::new(SlottedPage::new(MAGIC_NUMBER_LEAF))
-            }
-        };
-        let ret = self.buffer_manager.add_page(p);
-        return match ret {
-            Ok(buffer_id) => {
-                self.buffer_table.insert(page_id, buffer_id);
-                Ok(())
-            }
-            Err(e) => {
-                match e {
-                    BufferError::NoFreeBuffer => {
-                        Err(InitializeError(String::from("no free buffer")))
-                    }
-                }
+            Err(_) => {
+                SlottedPage::new(MAGIC_NUMBER_LEAF)
             }
         };
+        let buffer_id = self.buffer_manager.add_page(p).context("failed to add a page").map_err(|e| anyhow!(e))?;
+        self.buffer_table.insert(page_id, buffer_id);
+        Ok(())
     }
-    //
-    // pub fn fetch_page(&mut self, page_id: &PageId) -> Result<Rc<RefCell<PageBuffer>>, Error> {
-    //     if let Some(&buffer_id) = self.buffer_table.get(page_id) {
-    //         if let Some(buffer) = self.buffer_manager.fetch_page(&buffer_id) {
-    //             return Some(buffer.clone());
-    //         }
-    //     }
-    //     if let Some(page) = self.disk_manager.fetch_page(page_id) {
-    //         let ret = self.buffer_manager.add_page(RefCell::new(page));
-    //         if ret.is
-    //         return Some(Rc);
-    //     }
-    //     None
-    // }
+
+    pub fn fetch_page(&mut self, page_id: PageId) -> Result<Rc<PageBuffer>> {
+        if let Some(&buffer_id) = self.buffer_table.get(&page_id) {
+            if let Some(buffer) = self.buffer_manager.fetch_page(buffer_id) {
+                return Ok(buffer);
+            }
+        }
+        let page = self.disk_manager.fetch_page(page_id)
+            .with_context(|| format!("failed to find the page with {:?}", page_id))?;
+        let buffer_id = self.buffer_manager.add_page(page).context("failed to add the page").map_err(|e| anyhow!(e))?;
+        self.buffer_table.insert(page_id, buffer_id);
+        let page_buffer = self.buffer_manager.fetch_page(buffer_id).unwrap();
+
+        Ok(page_buffer)
+    }
 }
 
 #[cfg(test)]
