@@ -1,6 +1,9 @@
 extern crate core;
 
 mod btree;
+mod access_manager;
+mod buffer_manager;
+mod disk_manager;
 
 fn print(a: [i32; 3]) {
     println!("{:?}", a)

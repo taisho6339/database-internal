@@ -65,7 +65,9 @@ impl DiskManager {
 mod tests {
     use std::fs;
     use std::ptr::write;
+
     use crate::btree::slotted_page::MAGIC_NUMBER_LEAF;
+
     use super::*;
 
     const DB_PATH: &str = "test1.idb";

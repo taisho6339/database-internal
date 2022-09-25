@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use thiserror::Error;
 
-use crate::btree::access_manager::BufferId;
+use crate::access_manager::BufferId;
 use crate::btree::slotted_page::SlottedPage;
 
 #[derive(Debug, Error)]

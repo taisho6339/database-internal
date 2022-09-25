@@ -5,14 +5,13 @@ use std::path::Path;
 use std::rc::Rc;
 
 use thiserror::Error;
-use crate::btree::access_manager::Error::InitializeError;
 
-use crate::btree::buffer_manager::{BufferError, PageBuffer};
-use crate::btree::slotted_page::MAGIC_NUMBER_LEAF;
+use crate::access_manager::Error::InitializeError;
+use crate::btree::slotted_page::{MAGIC_NUMBER_LEAF, SlottedPage};
+use crate::buffer_manager::{BufferError, PageBuffer};
 
 use super::buffer_manager::BufferManager;
 use super::disk_manager::{DiskManager, PageId};
-use super::slotted_page::SlottedPage;
 
 pub struct AccessManager {
     //FIXME:
