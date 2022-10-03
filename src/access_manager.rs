@@ -7,7 +7,6 @@ use std::rc::Rc;
 use anyhow::{anyhow, Context, Result};
 use thiserror::Error;
 
-use crate::access_manager::Error::InitializeError;
 use crate::btree::slotted_page::{MAGIC_NUMBER_LEAF, SlottedPage};
 use crate::buffer_manager::{BufferError, BufferId, PageBuffer};
 
@@ -21,18 +20,12 @@ pub struct AccessManager {
     buffer_table: HashMap<PageId, BufferId>,
 }
 
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error("an error occurs in initializing: {0}")]
-    InitializeError(String),
-}
-
 impl AccessManager {
-    pub fn new(path: impl AsRef<Path>) -> Option<Self> {
-        let mut disk_manager = DiskManager::new(path).ok()?;
+    pub fn new(path: impl AsRef<Path>) -> Result<Self> {
+        let mut disk_manager = DiskManager::new(path).context("failed to new disk manager")?;
         let mut buffer_manager = BufferManager::new(10);
         let table = HashMap::new();
-        Some(Self {
+        Ok(Self {
             disk_manager,
             buffer_manager,
             buffer_table: table,
@@ -50,7 +43,7 @@ impl AccessManager {
                 SlottedPage::new(MAGIC_NUMBER_LEAF)
             }
         };
-        let buffer_id = self.buffer_manager.add_page(p).context("failed to add a page").map_err(|e| anyhow!(e))?;
+        let buffer_id = self.buffer_manager.add_page(p).context("failed to add a page")?;
         self.buffer_table.insert(page_id, buffer_id);
         Ok(())
     }
@@ -63,7 +56,7 @@ impl AccessManager {
         }
         let page = self.disk_manager.fetch_page(page_id)
             .with_context(|| format!("failed to find the page with {:?}", page_id))?;
-        let buffer_id = self.buffer_manager.add_page(page).context("failed to add the page").map_err(|e| anyhow!(e))?;
+        let buffer_id = self.buffer_manager.add_page(page).context("failed to add the page")?;
         self.buffer_table.insert(page_id, buffer_id);
         let page_buffer = self.buffer_manager.fetch_page(buffer_id).unwrap();
 
@@ -91,7 +84,7 @@ mod tests {
     fn test() {
         let cleanup = Cleanup;
         let ret = AccessManager::new(DB_PATH);
-        assert_eq!(ret.is_some(), true);
+        assert_eq!(ret.is_ok(), true);
         let mut manager = ret.unwrap();
         assert_eq!(manager.initialize().is_ok(), true);
     }

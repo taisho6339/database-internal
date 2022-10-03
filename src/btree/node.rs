@@ -5,15 +5,13 @@ use std::rc::Rc;
 
 use thiserror::Error;
 
-use crate::btree::slotted_page::SlottedPage;
+use crate::btree::slotted_page::{MAGIC_NUMBER_LEAF, SlottedPage};
+use crate::buffer_manager::PageBuffer;
+use crate::disk_manager::PageId;
 
 pub struct Node {
-    page: Rc<RefCell<SlottedPage>>,
+    page_buffer: Rc<PageBuffer>,
 }
-
-#[derive(Debug, Error)]
-pub enum Error {}
-
 
 // Deleteの実装
 
@@ -25,21 +23,25 @@ pub enum Error {}
 // 並行処理化する
 
 impl Node {
-    pub fn new(page: Rc<RefCell<SlottedPage>>) -> Self {
+    pub fn new(page_buffer: Rc<PageBuffer>) -> Self {
         Self {
-            page
+            page_buffer
         }
     }
 
-    pub fn insert(&self, key: &[u8], value: &[u8]) -> anyhow::Result<(), Error> {
-        let (index, found) = self.find(key);
+    // pub fn insert(&self, key: &[u8], value: &[u8]) -> anyhow::Result<(), Error> {
+    //     let (index, found) = self.find(key);
+    //
+    //     Ok(())
+    // }
 
-        Ok(())
+    pub fn is_leaf(&self) -> bool {
+        let magic_number = self.page_buffer.page.borrow().header_view().magic_number().read();
+        return magic_number == MAGIC_NUMBER_LEAF;
     }
 
     pub fn find(&self, key: &[u8]) -> (u16, bool) {
-        let borrowed_cell: &RefCell<SlottedPage> = self.page.borrow();
-        let page_ref = borrowed_cell.borrow();
+        let page_ref = self.page_buffer.page.borrow();
         let header_view = page_ref.header_view();
         let number_of_pointers = header_view.number_of_pointers().read();
 
@@ -94,7 +96,10 @@ mod tests {
             let value = (0xffff as u16).to_be_bytes();
             page.add_cell((i - 1) as usize, &key, &value).unwrap();
         }
-        let node = Node::new(Rc::new(RefCell::new(page)));
+        let node = Node::new(Rc::new(PageBuffer {
+            page: RefCell::new(page),
+            is_dirty: false,
+        }));
         assert_eq!(node.find(&(2 as u16).to_be_bytes()), (0, true));
         assert_eq!(node.find(&(3 as u16).to_be_bytes()), (1, false));
         assert_eq!(node.find(&(9 as u16).to_be_bytes()), (4, false));

@@ -78,12 +78,13 @@ impl SlottedPage {
         let mut s = Self {
             data: [0; PAGE_SIZE]
         };
-        let sum = s.check_sum();
         s.header_view_mut().magic_number_mut().write(magic_number);
         s.header_view_mut().version_mut().write(PAGE_VERSION_V1);
-        s.header_view_mut().check_sum_mut().write(sum);
         let offset = (PAGE_SIZE - HEADER_SIZE) as u16;
         s.header_view_mut().cell_offset_mut().write(offset);
+
+        let sum = s.check_sum();
+        s.header_view_mut().check_sum_mut().write(sum);
 
         s
     }
@@ -94,9 +95,17 @@ impl SlottedPage {
         }
     }
 
-    pub fn empty(&self) -> bool {
+    pub fn valid(&mut self) -> bool {
         let m = self.header_view().magic_number().read();
-        return m != MAGIC_NUMBER_INTERNAL && m != MAGIC_NUMBER_LEAF;
+        if m != MAGIC_NUMBER_INTERNAL && m != MAGIC_NUMBER_LEAF {
+            return false;
+        }
+        let check_sum = self.check_sum();
+        return self.header_view().check_sum().read() == check_sum;
+    }
+
+    pub fn empty(&self) -> bool {
+        return self.header_view().number_of_pointers().read() <= 0;
     }
 
     pub fn to_bytes(&self) -> &[u8; PAGE_SIZE] {
@@ -231,10 +240,10 @@ mod tests {
         let page = SlottedPage::new(MAGIC_NUMBER_LEAF);
         assert_eq!(page.header_view().magic_number().read(), MAGIC_NUMBER_LEAF);
         assert_eq!(page.header_view().version().read(), PAGE_VERSION_V1);
-        assert_eq!(page.header_view().check_sum().read(), 3340501009);
+        assert_eq!(page.header_view().check_sum().read(), 2327031672);
         assert_eq!(page.header_view().next_overflow_page_id().read(), 0);
         assert_eq!(page.header_view().number_of_pointers().read(), 0);
-        assert_eq!(page.header_view().cell_offset().read(), 0);
+        assert_eq!(page.header_view().cell_offset().read(), (PAGE_SIZE - HEADER_SIZE) as u16);
     }
 
     #[test]
@@ -243,7 +252,7 @@ mod tests {
         page.header_view_mut().number_of_pointers_mut().write(2);
 
         let mut bytes: [u8; 4] = [0; 4];
-        bytes[0..2].copy_from_slice(&mut (0x4 as u16).to_be_bytes());
+        bytes[0..2].copy_from_slice(&mut 0x4_u16.to_be_bytes());
         bytes[2..4].copy_from_slice(&mut (0x4 as u16).to_be_bytes());
         assert_eq!(page.body_view_mut().write(&bytes).is_ok(), true);
 

@@ -52,17 +52,17 @@ pub struct BufferItem {
 pub struct BufferManager {
     // Clock-sweep algorithm
     cache: Vec<BufferItem>,
-    next_check_id: BufferId,
+    buffer_cursor: BufferId,
 }
 
 impl BufferManager {
     pub fn new(size: usize) -> Self {
-        let next_check_id = BufferId(0);
+        let cursor = BufferId(0);
         let mut cache = vec![];
         cache.resize_with(size, Default::default);
         Self {
             cache,
-            next_check_id,
+            buffer_cursor: cursor,
         }
     }
 
@@ -73,7 +73,7 @@ impl BufferManager {
             if pinned_count >= self.cache.len() {
                 return Err(BufferError::NoFreeBuffer);
             }
-            let item = &mut self.cache[self.next_check_id.to_usize()];
+            let item = &mut self.cache[self.buffer_cursor.to_usize()];
             if item.is_pinned {
                 pinned_count += 1;
                 self.increment_next_buffer_id();
@@ -87,7 +87,7 @@ impl BufferManager {
             }
             break;
         }
-        let buffer_id = self.next_check_id;
+        let buffer_id = self.buffer_cursor;
         let page_buffer = PageBuffer {
             is_dirty: false,
             page: RefCell::new(item),
@@ -108,8 +108,8 @@ impl BufferManager {
             return None;
         }
         let item = &mut self.cache[index];
-        let is_empty = item.buffer.page.borrow().empty();
-        if is_empty {
+        let is_valid = item.buffer.page.borrow_mut().valid();
+        if !is_valid {
             return None;
         }
         item.usage_count += 1;
@@ -118,8 +118,8 @@ impl BufferManager {
     }
 
     fn increment_next_buffer_id(&mut self) {
-        let next_id = ((self.next_check_id.to_usize() + 1) % self.cache.len()) as u32;
-        self.next_check_id = BufferId(next_id);
+        let next_id = ((self.buffer_cursor.to_usize() + 1) % self.cache.len()) as u32;
+        self.buffer_cursor = BufferId(next_id);
     }
 }
 
@@ -132,37 +132,37 @@ mod tests {
     #[test]
     fn test_increment_next_buffer_id() {
         let mut manager = BufferManager::new(2);
-        assert_eq!(manager.next_check_id.to_usize(), 0);
+        assert_eq!(manager.buffer_cursor.to_usize(), 0);
         manager.increment_next_buffer_id();
-        assert_eq!(manager.next_check_id.to_usize(), 1);
+        assert_eq!(manager.buffer_cursor.to_usize(), 1);
         manager.increment_next_buffer_id();
-        assert_eq!(manager.next_check_id.to_usize(), 0);
+        assert_eq!(manager.buffer_cursor.to_usize(), 0);
     }
 
     #[test]
     fn test_add_page() {
         let mut manager = BufferManager::new(2);
-        assert_eq!(manager.next_check_id.to_usize(), 0);
+        assert_eq!(manager.buffer_cursor.to_usize(), 0);
 
         // Add
         let page = SlottedPage::new(MAGIC_NUMBER_LEAF);
         let result = manager.add_page(page);
         assert_eq!(result.is_ok(), true);
         assert_eq!(result.unwrap().to_usize(), 0);
-        assert_eq!(manager.next_check_id.to_usize(), 1);
+        assert_eq!(manager.buffer_cursor.to_usize(), 1);
 
         // Add over the capacity
         let page = SlottedPage::new(MAGIC_NUMBER_LEAF);
         let result = manager.add_page(page);
         assert_eq!(result.is_ok(), true);
         assert_eq!(result.unwrap().to_usize(), 1);
-        assert_eq!(manager.next_check_id.to_usize(), 0);
+        assert_eq!(manager.buffer_cursor.to_usize(), 0);
 
         let page = SlottedPage::new(MAGIC_NUMBER_LEAF);
         let result = manager.add_page(page);
         assert_eq!(result.is_ok(), true);
         assert_eq!(result.unwrap().to_usize(), 0);
-        assert_eq!(manager.next_check_id.to_usize(), 1);
+        assert_eq!(manager.buffer_cursor.to_usize(), 1);
     }
 
     #[test]
@@ -179,7 +179,8 @@ mod tests {
         let ret = manager.fetch_page(buffer_id);
         assert_eq!(ret.is_some(), true);
         let p = ret.unwrap();
-        assert_eq!(p.page.borrow().empty(), false);
+        assert_eq!(p.page.borrow_mut().valid(), true);
+        assert_eq!(p.page.borrow().empty(), true);
         assert_eq!(p.page.borrow().header_view().magic_number().read(), MAGIC_NUMBER_LEAF);
     }
 }
